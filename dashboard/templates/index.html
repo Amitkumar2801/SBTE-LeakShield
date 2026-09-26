@@ -46,7 +46,7 @@
       </div>
       <div class="stat-card">
         <span class="stat-header">Central Board OTP</span>
-        <span class="stat-value" style="letter-spacing: 0.15em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
+        <span class="stat-value" id="statOtp" style="letter-spacing: 0.15em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
       </div>
     </section>
 
@@ -87,7 +87,7 @@
             </div>
             <div class="info-row">
               <span class="info-label">Current 4-Digit OTP:</span>
-              <span class="info-value" style="font-weight: 700; letter-spacing: 0.2em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
+              <span class="info-value" id="infoOtp" style="font-weight: 700; letter-spacing: 0.2em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
             </div>
           </div>
 
@@ -168,6 +168,12 @@
           feedback.style.color = 'var(--accent-emerald)';
           updateVaultUI(false);
           document.getElementById('otpInput').value = '';
+          if (result.new_otp) {
+            const statOtp = document.getElementById('statOtp');
+            if (statOtp) statOtp.textContent = result.new_otp;
+            const infoOtp = document.getElementById('infoOtp');
+            if (infoOtp) infoOtp.textContent = result.new_otp;
+          }
         } else {
           feedback.textContent = result.message || 'OTP Verification failed.';
           feedback.style.color = 'var(--accent-rose)';
@@ -189,6 +195,12 @@
           updateVaultUI(true);
           feedback.textContent = data.message;
           feedback.style.color = 'var(--text-muted)';
+          if (data.new_otp) {
+            const statOtp = document.getElementById('statOtp');
+            if (statOtp) statOtp.textContent = data.new_otp;
+            const infoOtp = document.getElementById('infoOtp');
+            if (infoOtp) infoOtp.textContent = data.new_otp;
+          }
         }
       } catch (err) {
         console.error(err);

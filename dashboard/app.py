@@ -15,15 +15,17 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 # ==========================================
 GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw-E5qG1l_ChhXKTG1lxYV8O0xHUNAW4iXOP8yWBQqNsmBMJugcH2d6ET8RlX56fL1c/exec"
 CENTER_NAME = "NGP PATNA-13"
-CURRENT_OTP = "4829"
 COM_PORT = "COM3"  # Change to your actual Arduino COM port (e.g. COM3, COM4)
 BAUD_RATE = 9600
-
-
 def generate_new_otp():
+    """Generates a dynamic 4-digit random OTP and updates CURRENT_OTP."""
     global CURRENT_OTP
     CURRENT_OTP = str(random.randint(1000, 9999))
+    print(f"[OTP SYSTEM] Dynamic 4-Digit OTP Updated: {CURRENT_OTP}")
     return CURRENT_OTP
+
+# Initialize dynamic OTP
+CURRENT_OTP = generate_new_otp()
 
 
 # ==========================================
@@ -215,10 +217,20 @@ def verify_otp():
     entered_otp = str(data.get('otp', '')).strip()
 
     if entered_otp == CURRENT_OTP:
+        verified_otp = entered_otp
         vault_unlocked = True
         send_hardware_command('U')  # 'U' for Unlock (Servo 90 deg + Buzzer tone)
-        send_to_google_sheet_async("OTP Verified - Vault Unlocked", entered_otp, "UNLOCKED")
-        return jsonify({"status": "success", "message": "Vault Unlocked Successfully!", "is_locked": False})
+        send_to_google_sheet_async("OTP Verified - Vault Unlocked", verified_otp, "UNLOCKED")
+
+        # Dynamically generate and update CURRENT_OTP upon successful verification
+        new_otp = generate_new_otp()
+
+        return jsonify({
+            "status": "success", 
+            "message": "Vault Unlocked Successfully!", 
+            "is_locked": False,
+            "new_otp": new_otp
+        })
     else:
         return jsonify({"status": "error", "message": "Invalid OTP!"}), 400
 
@@ -230,7 +242,16 @@ def lock_vault():
     vault_unlocked = False
     send_hardware_command('L')  # 'L' for Lock (Servo 0 deg)
     send_to_google_sheet_async("Vault Locked Manually", CURRENT_OTP, "LOCKED")
-    return jsonify({"status": "success", "message": "Vault Locked Successfully!", "is_locked": True})
+
+    # Dynamically generate and update CURRENT_OTP when vault is locked again
+    new_otp = generate_new_otp()
+
+    return jsonify({
+        "status": "success", 
+        "message": "Vault Locked Successfully!", 
+        "is_locked": True,
+        "new_otp": new_otp
+    })
 
 
 @app.route('/generate_otp', methods=['GET', 'POST'])
