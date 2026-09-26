@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import threading
@@ -17,15 +18,20 @@ GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw-E5qG1l_Chh
 CENTER_NAME = "NGP PATNA-13"
 COM_PORT = "COM3"  # Change to your actual Arduino COM port (e.g. COM3, COM4)
 BAUD_RATE = 9600
+
+# Persistent Daily 4-Digit College OTP (Fixed for this college for the entire exam day)
+# SBTE Central Board identifies each center uniquely by this OTP in Google Sheets
+DEFAULT_COLLEGE_OTP = "6532"
+CURRENT_OTP = os.environ.get("DAILY_OTP", DEFAULT_COLLEGE_OTP)
+print(f"[OTP SYSTEM] Persistent Daily College OTP Registered: {CURRENT_OTP} (Center: {CENTER_NAME})")
+
 def generate_new_otp():
-    """Generates a dynamic 4-digit random OTP and updates CURRENT_OTP."""
+    """Generates a dynamic 4-digit OTP if explicitly requested by Exam Controller."""
     global CURRENT_OTP
     CURRENT_OTP = str(random.randint(1000, 9999))
-    print(f"[OTP SYSTEM] Dynamic 4-Digit OTP Updated: {CURRENT_OTP}")
+    print(f"[OTP SYSTEM] College OTP Manually Regenerated: {CURRENT_OTP}")
     return CURRENT_OTP
 
-# Initialize dynamic OTP
-CURRENT_OTP = generate_new_otp()
 
 
 # ==========================================
@@ -126,6 +132,7 @@ def generate_frames():
     3. Hand / Finger Movement Detection (Yellow / Orange bounding box)
     4. Pichhe Mure / Turning Back Detection (Red Alert Banner)
     """
+    global vault_unlocked, CURRENT_OTP
     camera = cv2.VideoCapture(0)
     if not camera.isOpened():
         camera = cv2.VideoCapture(1)
@@ -272,15 +279,20 @@ def generate_frames():
             # 5. OVERLAYS & ALERTS (TOP HEADER & HUD)
             # ---------------------------------------------------------
             overlay_alerts = []
+            critical_alerts = []
+
             if phone_detected:
                 overlay_alerts.append("PHONE DETECTED")
+                critical_alerts.append("PHONE DETECTED")
             if turned_back:
                 overlay_alerts.append("HEAD TURNED BACK / LOOKING BEHIND")
+                critical_alerts.append("HEAD TURNED BACK")
             if hand_movement_detected:
+                # Shown visually in yellow on camera frame, but not spammed to Google Sheets
                 overlay_alerts.append("HAND/FINGER MOVEMENT")
 
             if overlay_alerts:
-                # Semi-transparent top warning header
+                # Semi-transparent top warning header on video stream
                 overlay = frame.copy()
                 cv2.rectangle(overlay, (0, 0), (w, 55), (0, 0, 210), -1)
                 cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
@@ -289,16 +301,27 @@ def generate_frames():
                 cv2.putText(frame, alert_text, (15, 36),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
 
-                # Rate-limited Google Sheet alert logging (every 8 seconds)
+            # Central Board Google Sheets Alert Logging:
+            # Rule 1: Vault MUST be UNLOCKED ("pahle lock, unlock hoga tb sara work krega")
+            # Rule 2: Only log critical violations (Phone Detected or Head Turned Back) to prevent sheet spam
+            # Rule 3: Use college's persistent daily OTP (CURRENT_OTP) in Column D to identify center
+            # Rule 4: 20-second cooldown between sheet submissions
+            if vault_unlocked and critical_alerts:
                 curr_time = time.time()
-                if curr_time - last_alert_time > 8:
-                    event_msg = "Suspicious: " + " / ".join(overlay_alerts)
-                    send_to_google_sheet_async(event_msg, "N/A", "ALERT")
+                if curr_time - last_alert_time > 20:
+                    event_msg = "Suspicious: " + " / ".join(critical_alerts)
+                    send_to_google_sheet_async(event_msg, CURRENT_OTP, "ALERT")
                     last_alert_time = curr_time
 
+            # Status Banner on HUD
+            status_indicator = "SURVEILLANCE: ACTIVE (UNLOCKED)" if vault_unlocked else "VAULT LOCKED (STANDBY)"
+            status_color = (0, 255, 0) if vault_unlocked else (0, 165, 255)
+            cv2.putText(frame, f"[{status_indicator}]", (w - 330, h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_color, 1)
+
             # Bottom HUD Bar
-            cv2.putText(frame, f"SBTE-LeakShield AI | {CENTER_NAME} | {time.strftime('%H:%M:%S')}", 
-                        (15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
+            cv2.putText(frame, f"SBTE-LeakShield AI | {CENTER_NAME} | OTP: {CURRENT_OTP} | {time.strftime('%H:%M:%S')}", 
+                        (15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 1)
 
             prev_gray = gray
 
@@ -340,17 +363,16 @@ def verify_otp():
         send_hardware_command('U')  # 'U' for Unlock (Servo 90 deg + Buzzer tone)
         send_to_google_sheet_async("OTP Verified - Vault Unlocked", verified_otp, "UNLOCKED")
 
-        # Dynamically generate and update CURRENT_OTP upon successful verification
-        new_otp = generate_new_otp()
-
+        # Persistent daily OTP remains fixed for this college for the day
         return jsonify({
             "status": "success", 
-            "message": "Vault Unlocked Successfully!", 
+            "message": "Vault Unlocked Successfully! Active Surveillance Engaged.", 
             "is_locked": False,
-            "new_otp": new_otp
+            "otp": CURRENT_OTP,
+            "new_otp": CURRENT_OTP
         })
     else:
-        return jsonify({"status": "error", "message": "Invalid OTP!"}), 400
+        return jsonify({"status": "error", "message": "Invalid OTP! Access Denied."}), 400
 
 
 @app.route('/lock_vault', methods=['POST'])
@@ -361,14 +383,13 @@ def lock_vault():
     send_hardware_command('L')  # 'L' for Lock (Servo 0 deg)
     send_to_google_sheet_async("Vault Locked Manually", CURRENT_OTP, "LOCKED")
 
-    # Dynamically generate and update CURRENT_OTP when vault is locked again
-    new_otp = generate_new_otp()
-
+    # Persistent daily OTP remains fixed for this college for the day
     return jsonify({
         "status": "success", 
-        "message": "Vault Locked Successfully!", 
+        "message": "Vault Locked Successfully! Surveillance Alert Logging Paused.", 
         "is_locked": True,
-        "new_otp": new_otp
+        "otp": CURRENT_OTP,
+        "new_otp": CURRENT_OTP
     })
 
 
