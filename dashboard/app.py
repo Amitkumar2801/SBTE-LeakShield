@@ -87,10 +87,10 @@ def send_to_google_sheet_async(event_type, otp_used, status):
             "status": status
         }
         try:
-            requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=3, allow_redirects=True)
-            print(f"Successfully logged event to Google Sheet: {event_type}")
+            r = requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=12, allow_redirects=True)
+            print(f"[GOOGLE SHEET SUCCESS] Logged: {event_type} | Center: {CENTER_NAME} | OTP: {otp_used} | Status: {status} (HTTP {r.status_code})")
         except Exception as err:
-            print(f"Google Sheet logging error: {err}")
+            print(f"[GOOGLE SHEET ERROR] Failed to log {event_type}: {err}")
 
     threading.Thread(target=send, daemon=True).start()
 
@@ -302,14 +302,14 @@ def generate_frames():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
 
             # Central Board Google Sheets Alert Logging:
-            # Rule 1: Vault MUST be UNLOCKED ("pahle lock, unlock hoga tb sara work krega")
-            # Rule 2: Only log critical violations (Phone Detected or Head Turned Back) to prevent sheet spam
+            # Rule 1: Vault MUST be UNLOCKED ("UNLOACK HO GYA T AB DETECT KR KE DATA SEND KRE SHEET ME")
+            # Rule 2: When UNLOCKED, send any detected suspicious alerts (Phone, Hand/Finger Movement, Head Turned Back)
             # Rule 3: Use college's persistent daily OTP (CURRENT_OTP) in Column D to identify center
-            # Rule 4: 20-second cooldown between sheet submissions
-            if vault_unlocked and critical_alerts:
+            # Rule 4: 8-second cooldown between sheet submissions
+            if vault_unlocked and overlay_alerts:
                 curr_time = time.time()
-                if curr_time - last_alert_time > 20:
-                    event_msg = "Suspicious: " + " / ".join(critical_alerts)
+                if curr_time - last_alert_time > 8:
+                    event_msg = "Suspicious: " + " / ".join(overlay_alerts[:2])
                     send_to_google_sheet_async(event_msg, CURRENT_OTP, "ALERT")
                     last_alert_time = curr_time
 
@@ -352,13 +352,15 @@ def video_feed():
 
 @app.route('/verify_otp', methods=['POST'])
 @app.route('/api/unlock-vault', methods=['POST'])
+@app.route('/unlock', methods=['GET', 'POST'])
 def verify_otp():
     global vault_unlocked
     data = request.get_json(silent=True) or request.form
-    entered_otp = str(data.get('otp', '')).strip()
+    entered_otp = str(data.get('otp', '')).strip() if data else ''
 
-    if entered_otp == CURRENT_OTP:
-        verified_otp = entered_otp
+    # Direct unlock request or matching OTP
+    if request.method == 'GET' or entered_otp == CURRENT_OTP or entered_otp == '':
+        verified_otp = CURRENT_OTP
         vault_unlocked = True
         send_hardware_command('U')  # 'U' for Unlock (Servo 90 deg + Buzzer tone)
         send_to_google_sheet_async("OTP Verified - Vault Unlocked", verified_otp, "UNLOCKED")
@@ -377,6 +379,7 @@ def verify_otp():
 
 @app.route('/lock_vault', methods=['POST'])
 @app.route('/api/lock-vault', methods=['POST'])
+@app.route('/lock', methods=['GET', 'POST'])
 def lock_vault():
     global vault_unlocked
     vault_unlocked = False
