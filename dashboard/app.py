@@ -3,6 +3,7 @@ import threading
 import requests
 import serial
 import time
+import random
 from flask import Flask, render_template, Response, request, jsonify
 
 app = Flask(__name__)
@@ -15,6 +16,11 @@ CENTER_NAME = "NGP PATNA-13"
 CURRENT_OTP = "4829"
 COM_PORT = "COM3"  # Change to your actual Arduino COM port (e.g. COM3, COM4)
 BAUD_RATE = 9600
+
+def generate_new_otp():
+    global CURRENT_OTP
+    CURRENT_OTP = str(random.randint(1000, 9999))
+    return CURRENT_OTP
 
 # ==========================================
 # GLOBAL STATES
@@ -154,6 +160,12 @@ def lock_vault():
     send_hardware_command('L')  # 'L' for Lock (Servo 0 deg)
     send_to_google_sheet_async("Vault Locked Manually", CURRENT_OTP, "LOCKED")
     return jsonify({"status": "success", "message": "Vault Locked Successfully!", "is_locked": True})
+
+@app.route('/generate_otp', methods=['GET', 'POST'])
+@app.route('/api/generate-otp', methods=['GET', 'POST'])
+def api_generate_otp():
+    new_otp = generate_new_otp()
+    return jsonify({"status": "success", "new_otp": new_otp})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
