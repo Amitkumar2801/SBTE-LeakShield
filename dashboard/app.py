@@ -119,27 +119,20 @@ def create_standby_frame(msg="CAMERA STREAM INITIALIZING / STANDBY"):
 # OPENCV CAMERA & AI SURVEILLANCE
 # ==========================================
 def generate_frames():
-    """Streams live OpenCV video frames with face & rapid motion detection."""
-    # Try opening camera index 0 first, fallback to 1
+    """
+    Real-Time AI Surveillance Stream with:
+    1. Human Detection (Green bounding box)
+    2. Phone Detection (Red bounding box)
+    3. Hand / Finger Movement Detection (Yellow / Orange bounding box)
+    4. Pichhe Mure / Turning Back Detection (Red Alert Banner)
+    """
     camera = cv2.VideoCapture(0)
     if not camera.isOpened():
         camera = cv2.VideoCapture(1)
 
-    # Properly initialize face_cascade with safe attribute checks
-    face_cascade = None
-    if hasattr(cv2, 'CascadeClassifier') and hasattr(cv2, 'data'):
-        try:
-            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            face_cascade = cv2.CascadeClassifier(cascade_path)
-            if face_cascade.empty():
-                face_cascade = None
-        except Exception as err:
-            print(f"[!] Warning initializing face cascade: {err}")
-            face_cascade = None
-
-    # Properly initialize previous frame for motion comparison
     prev_gray = None
     last_alert_time = 0
+    head_turned_counter = 0
 
     while True:
         success = False
@@ -149,38 +142,163 @@ def generate_frames():
             success, frame = camera.read()
 
         if not success or frame is None:
-            # Display standby frame instead of terminating the generator
             frame = create_standby_frame("CAMERA RECONNECTING / STANDBY")
             time.sleep(0.08)
         else:
+            h, w = frame.shape[:2]
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # Face Detection Bounding Box
-            if face_cascade is not None:
-                try:
-                    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-                    for (x, y, w, h) in faces:
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                        cv2.putText(frame, "HUMAN PRESENT", (x, max(20, y - 10)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                except Exception:
-                    pass
+            # ---------------------------------------------------------
+            # 1. ROBUST HUMAN & FACE/TORSO SENSING (GREEN BOX)
+            # ---------------------------------------------------------
+            ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+            # Lighting-invariant skin detection for accurate human presence
+            skin_mask = cv2.inRange(ycrcb, np.array([0, 133, 77], dtype=np.uint8), np.array([255, 173, 127], dtype=np.uint8))
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
 
-            # Rapid Motion & Activity Detection
+            contours, _ = cv2.findContours(skin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid_skin_cnts = sorted([c for c in contours if cv2.contourArea(c) > 1200], key=cv2.contourArea, reverse=True)
+
+            human_detected = False
+            head_box = None
+
+            if len(valid_skin_cnts) > 0:
+                human_detected = True
+                hx, hy, hw, hh = cv2.boundingRect(valid_skin_cnts[0])
+                head_box = (hx, hy, hw, hh)
+
+                # Upper-body / torso bounding box
+                body_x1 = max(0, hx - int(hw * 0.45))
+                body_y1 = max(0, hy - int(hh * 0.15))
+                body_x2 = min(w, hx + int(hw * 1.45))
+                body_y2 = min(h, hy + int(hh * 2.7))
+
+                # Draw HUMAN DETECTED Green Box
+                cv2.rectangle(frame, (body_x1, body_y1), (body_x2, body_y2), (0, 255, 0), 2)
+                cv2.putText(frame, "HUMAN DETECTED", (body_x1, max(22, body_y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
+            # Motion-based human fallback if lighting obscures skin
+            if not human_detected and prev_gray is not None:
+                diff = cv2.absdiff(prev_gray, gray)
+                _, thresh = cv2.threshold(diff, 20, 255, cv2.THRESH_BINARY)
+                motion_cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                big_motion = [c for c in motion_cnts if cv2.contourArea(c) > 5000]
+                if big_motion:
+                    bx, by, bw, bh = cv2.boundingRect(big_motion[0])
+                    cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+                    cv2.putText(frame, "HUMAN PRESENT", (bx, max(22, by - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+                    human_detected = True
+
+            # ---------------------------------------------------------
+            # 2. PHONE SENSING (RED BOX)
+            # ---------------------------------------------------------
+            phone_detected = False
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edged = cv2.Canny(blurred, 40, 140)
+            edge_cnts, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            for c in edge_cnts:
+                area = cv2.contourArea(c)
+                if 2000 <= area <= 60000:
+                    peri = cv2.arcLength(c, True)
+                    approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+                    if len(approx) == 4 and cv2.isContourConvex(approx):
+                        px, py, pw, ph = cv2.boundingRect(approx)
+                        ratio = float(ph) / pw if pw > 0 else 0
+                        # Typical vertical (1.4 - 2.6) or horizontal (0.38 - 0.72) smartphone aspect ratios
+                        if (1.4 <= ratio <= 2.6) or (0.38 <= ratio <= 0.72):
+                            # Draw PHONE DETECTED Red Box
+                            cv2.rectangle(frame, (px, py), (px + pw, py + ph), (0, 0, 255), 3)
+                            cv2.putText(frame, "PHONE DETECTED", (px, max(22, py - 10)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            phone_detected = True
+
+            # ---------------------------------------------------------
+            # 3. UNGLI / HAND MOVEMENT SENSING (YELLOW/ORANGE BOX)
+            # ---------------------------------------------------------
+            hand_movement_detected = False
             if prev_gray is not None and prev_gray.shape == gray.shape:
-                frame_diff = cv2.absdiff(prev_gray, gray)
-                _, thresh = cv2.threshold(frame_diff, 25, 255, cv2.THRESH_BINARY)
-                non_zero_count = cv2.countNonZero(thresh)
+                diff = cv2.absdiff(prev_gray, gray)
+                _, thresh = cv2.threshold(diff, 28, 255, cv2.THRESH_BINARY)
+                dilated = cv2.dilate(thresh, None, iterations=2)
+                motion_cnts, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                if non_zero_count > 15000:  # Threshold for rapid movement / phone interaction
-                    cv2.putText(frame, "SUSPICIOUS ACTIVITY: RAPID MOVEMENT", (20, 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                for c in motion_cnts:
+                    area = cv2.contourArea(c)
+                    # Hand or finger gesture sized motion
+                    if 900 <= area <= 22000:
+                        mx, my, mw, mh = cv2.boundingRect(c)
+                        # Hand movement below head or in desk interaction region
+                        if head_box is None or my > (head_box[1] + int(head_box[3] * 0.65)):
+                            hand_movement_detected = True
+                            cv2.rectangle(frame, (mx, my), (mx + mw, my + mh), (0, 215, 255), 2)
+                            cv2.putText(frame, "HAND / FINGER MOVEMENT", (mx, max(20, my - 8)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 215, 255), 2)
 
-                    # Rate-limited Google Sheet alert logging (every 10 seconds)
-                    current_time = time.time()
-                    if current_time - last_alert_time > 10:
-                        send_to_google_sheet_async("Suspicious Motion / Phone Alert", "N/A", "ALERT")
-                        last_alert_time = current_time
+            # ---------------------------------------------------------
+            # 4. PICHHE MURE (TURNING BACK / LOOKING AWAY) SENSING
+            # ---------------------------------------------------------
+            turned_back = False
+            if head_box is not None:
+                hx, hy, hw, hh = head_box
+                head_roi = skin_mask[max(0, hy):min(skin_mask.shape[0], hy + hh), max(0, hx):min(skin_mask.shape[1], hx + hw)]
+                if head_roi.size > 0:
+                    skin_ratio = cv2.countNonZero(head_roi) / float(head_roi.size)
+                    # When turned back, back of head/hair covers ROI and skin ratio drops
+                    if skin_ratio < 0.15:
+                        head_turned_counter += 1
+                    else:
+                        head_turned_counter = max(0, head_turned_counter - 1)
+
+                # Check horizontal center deviation (peeking away)
+                head_center_x = hx + hw / 2
+                if head_center_x < w * 0.15 or head_center_x > w * 0.85:
+                    head_turned_counter += 1
+
+                if head_turned_counter >= 3:
+                    turned_back = True
+            elif human_detected:
+                # Body detected but head completely turned away / hidden
+                head_turned_counter += 1
+                if head_turned_counter >= 3:
+                    turned_back = True
+            else:
+                head_turned_counter = 0
+
+            # ---------------------------------------------------------
+            # 5. OVERLAYS & ALERTS (TOP HEADER & HUD)
+            # ---------------------------------------------------------
+            overlay_alerts = []
+            if phone_detected:
+                overlay_alerts.append("PHONE DETECTED")
+            if turned_back:
+                overlay_alerts.append("HEAD TURNED BACK / LOOKING BEHIND")
+            if hand_movement_detected:
+                overlay_alerts.append("HAND/FINGER MOVEMENT")
+
+            if overlay_alerts:
+                # Semi-transparent top warning header
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, 55), (0, 0, 210), -1)
+                cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+
+                alert_text = "ALERT: " + " | ".join(overlay_alerts[:2])
+                cv2.putText(frame, alert_text, (15, 36),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+                # Rate-limited Google Sheet alert logging (every 8 seconds)
+                curr_time = time.time()
+                if curr_time - last_alert_time > 8:
+                    event_msg = "Suspicious: " + " / ".join(overlay_alerts)
+                    send_to_google_sheet_async(event_msg, "N/A", "ALERT")
+                    last_alert_time = curr_time
+
+            # Bottom HUD Bar
+            cv2.putText(frame, f"SBTE-LeakShield AI | {CENTER_NAME} | {time.strftime('%H:%M:%S')}", 
+                        (15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
             prev_gray = gray
 

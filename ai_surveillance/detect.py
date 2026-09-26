@@ -61,21 +61,22 @@ class SurveillanceEngine:
             for (x, y, w, h) in detected:
                 faces.append((x, y, w, h))
 
-        # Method B: Universal Skin/Head Region Segmentation (OpenCV 5.x / fallback)
+        # Method B: Robust YCrCb Skin & Torso Segmentation (OpenCV 5.x / fallback)
         if len(faces) == 0:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-            upper_skin = np.array([25, 255, 255], dtype=np.uint8)
-            mask = cv2.inRange(hsv, lower_skin, upper_skin)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+            mask = cv2.inRange(ycrcb, np.array([0, 133, 77], dtype=np.uint8), np.array([255, 173, 127], dtype=np.uint8))
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in contours:
-                if cv2.contourArea(c) > 3500:
-                    x, y, w, h = cv2.boundingRect(c)
-                    ratio = float(h) / w if w > 0 else 0
-                    if 0.8 <= ratio <= 2.4:
-                        faces.append((x, y, w, h))
+            valid = sorted([c for c in contours if cv2.contourArea(c) > 1200], key=cv2.contourArea, reverse=True)
+            if valid:
+                hx, hy, hw, hh = cv2.boundingRect(valid[0])
+                h_img, w_img = frame.shape[:2]
+                body_x1 = max(0, hx - int(hw * 0.45))
+                body_y1 = max(0, hy - int(hh * 0.15))
+                body_x2 = min(w_img, hx + int(hw * 1.45))
+                body_y2 = min(h_img, hy + int(hh * 2.7))
+                faces.append((body_x1, body_y1, body_x2 - body_x1, body_y2 - body_y1))
 
         return faces
 
