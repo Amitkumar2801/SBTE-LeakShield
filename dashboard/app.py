@@ -1,12 +1,15 @@
 """
 SBTE-LeakShield: Central Dashboard Backend
-Flask Server with Real-Time Video Streaming, Hardware Serial Integration & 4-Digit OTP Vault Unlock
+Flask Server with Real-Time Video Streaming, Hardware Serial Integration, 
+4-Digit OTP Vault Unlock & Asynchronous Google Sheets Event Logging
 """
 
 import os
 import sys
 import time
+import threading
 from datetime import datetime
+import requests
 from flask import Flask, render_template, request, jsonify, Response
 
 # Add parent directory to path to import ai_surveillance module
@@ -16,7 +19,7 @@ try:
     from ai_surveillance.detect import generate_frames
 except ImportError:
     # Fallback frame generator if OpenCV or module import fails
-    def generate_frames(camera_source=0):
+    def generate_frames(camera_source=0, alert_callback=None):
         while True:
             time.sleep(1)
             yield b''
@@ -31,6 +34,47 @@ except ImportError:
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'sbte-leakshield-secure-2026')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# --- Google Sheets Web App Endpoint ---
+GOOGLE_SHEET_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw-E5qG1l_ChhXKTG1lxYV8O0xHUNAW4iXOP8yWBQqNsmBMJugcH2d6ET8RlX56fL1c/exec"
+
+
+def send_to_google_sheet(center_name, event_type, otp, status):
+    """
+    Sends event telemetry to Google Sheets Web App in a non-blocking background thread.
+    Catches all network exceptions to prevent stalling Flask or the OpenCV stream.
+    
+    Payload Structure:
+    {
+      "center_name": "NGP PATNA-13",
+      "event_type": "Vault Unlocked / Motion Alert",
+      "otp": "4829",
+      "status": "UNLOCKED / ALERT"
+    }
+    """
+    def _worker():
+        payload = {
+            "center_name": center_name,
+            "event_type": event_type,
+            "otp": str(otp),
+            "status": status
+        }
+        try:
+            # Google Apps Script web apps return a 302 redirect on POST, so allow_redirects=True is vital
+            response = requests.post(
+                GOOGLE_SHEET_WEBAPP_URL,
+                json=payload,
+                timeout=3,
+                allow_redirects=True
+            )
+            print(f"[GOOGLE SHEETS LOG] Logged '{event_type}' ({status}) | Response: {response.status_code}")
+        except Exception as e:
+            # Silently catch and log to ensure network delay/errors never crash Flask or OpenCV
+            print(f"[!] Google Sheets Logging Warning: {e}")
+
+    # Launch daemon thread so execution is 100% non-blocking
+    threading.Thread(target=_worker, daemon=True).start()
+
 
 # --- Vault & Examination State ---
 AUTHORIZED_4DIGIT_OTP = os.environ.get('VAULT_OTP', '4829')  # 4-Digit Central Exam Board OTP
@@ -88,6 +132,17 @@ def send_hardware_signal(command: str):
     return "SIMULATION_SUCCESS"
 
 
+def handle_surveillance_alert(alert_desc):
+    """Callback invoked when OpenCV detects phone or sudden rapid movement."""
+    print(f"[VISION ALERT] High-severity event detected: {alert_desc}")
+    send_to_google_sheet(
+        center_name=vault_state.get("exam_center", "NGP PATNA-13"),
+        event_type=f"Motion Alert / {alert_desc}",
+        otp=vault_state.get("active_otp", "4829"),
+        status="ALERT"
+    )
+
+
 # --- HTTP Routes ---
 
 @app.route('/')
@@ -100,7 +155,7 @@ def dashboard():
 def video_feed():
     """Streams live OpenCV surveillance feed with face & suspicious object overlays."""
     return Response(
-        generate_frames(camera_source=0),
+        generate_frames(camera_source=0, alert_callback=handle_surveillance_alert),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 
@@ -109,7 +164,7 @@ def video_feed():
 def unlock_vault():
     """
     API endpoint accepting a 4-digit OTP to trigger vault unlocking.
-    Triggers physical Arduino Serial signal (or simulated signal).
+    Triggers physical Arduino Serial signal (or simulated signal) and logs event to Google Sheets.
     """
     data = request.get_json(silent=True) or request.form
     entered_otp = str(data.get('otp', '')).strip()
@@ -137,6 +192,14 @@ def unlock_vault():
         vault_state["last_unlocked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         vault_state["unlocked_by"] = operator
 
+        # Trigger Google Sheets Web App logging for Vault Unlock event
+        send_to_google_sheet(
+            center_name=vault_state.get("exam_center", "NGP PATNA-13"),
+            event_type="Vault Unlocked",
+            otp=entered_otp,
+            status="UNLOCKED"
+        )
+
         mode_desc = "Physical Arduino" if signal_status == "HARDWARE_SUCCESS" else "Simulated Hardware"
         return jsonify({
             "status": "success",
@@ -161,6 +224,20 @@ def lock_vault():
         "message": "Vault successfully re-locked. Servo reset to 0°.",
         "is_locked": True
     })
+
+
+@app.route('/api/surveillance/alerts', methods=['POST'])
+def receive_surveillance_alert():
+    """API endpoint allowing external vision scripts to push alerts and log to Google Sheets."""
+    data = request.get_json(silent=True) or {}
+    alert_type = data.get("type", "Motion Alert")
+    send_to_google_sheet(
+        center_name=vault_state.get("exam_center", "NGP PATNA-13"),
+        event_type=alert_type,
+        otp=vault_state.get("active_otp", "4829"),
+        status="ALERT"
+    )
+    return jsonify({"status": "success", "message": "Alert received and logged"}), 200
 
 
 @app.route('/api/vault/status', methods=['GET'])

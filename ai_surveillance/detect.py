@@ -9,12 +9,15 @@ import numpy as np
 
 
 class SurveillanceEngine:
-    def __init__(self, camera_source=0):
+    def __init__(self, camera_source=0, alert_callback=None):
         self.camera_source = camera_source
+        self.alert_callback = alert_callback
         self.cap = None
         self.prev_gray = None
         self.last_motion_time = 0
         self.motion_cooldown = 1.5  # seconds overlay remains active
+        self.last_sheet_alert_time = 0
+        self.sheet_alert_cooldown = 6.0  # seconds between sending alert callbacks to avoid flooding
         self.suspicious_active = False
 
         # Try initializing Haar cascade if supported by installed OpenCV build
@@ -169,6 +172,14 @@ class SurveillanceEngine:
         current_time = time.time()
         if is_suspicious:
             self.last_motion_time = current_time
+            # Trigger external alert callback (e.g. Google Sheets logger) with cooldown
+            if self.alert_callback and (current_time - self.last_sheet_alert_time >= self.sheet_alert_cooldown):
+                self.last_sheet_alert_time = current_time
+                reasons_str = " / ".join(sorted(set(suspicious_reasons))) if suspicious_reasons else "Motion Alert"
+                try:
+                    self.alert_callback(reasons_str)
+                except Exception as cb_err:
+                    print(f"[!] Alert callback error: {cb_err}")
 
         # Maintain overlay for alert cooldown duration
         if current_time - self.last_motion_time < self.motion_cooldown:
@@ -201,12 +212,12 @@ class SurveillanceEngine:
         return frame, is_suspicious
 
 
-def generate_frames(camera_source=0):
+def generate_frames(camera_source=0, alert_callback=None):
     """
     Generator function used by Flask /video_feed route.
     Yields multipart JPEG frames.
     """
-    engine = SurveillanceEngine(camera_source=camera_source)
+    engine = SurveillanceEngine(camera_source=camera_source, alert_callback=alert_callback)
     opened = engine.init_camera()
 
     while True:
