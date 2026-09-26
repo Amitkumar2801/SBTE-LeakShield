@@ -44,3 +44,14 @@ Ensuring **leak-proof question paper distribution** and **malpractice-free exam 
                           │                │
                           ▼                ▼
                      Vault Unlocks    Real-Time Alert 🚨
+
+
+👥 Team: SBTE-LeakShield
+Developer / Coder Lead: [AMIT KUMAR ]
+
+Hardware & Circuit Lead: [JITENDRA KUMAR]
+
+Research & Pitch Lead: [Badal kumar]
+
+Demo & Operations Lead: [Kishan raj]
+                     
