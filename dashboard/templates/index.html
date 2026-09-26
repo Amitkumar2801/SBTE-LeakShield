@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SBTE-LeakShield | Central Exam Board Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <!-- Navigation Bar -->
+  <header class="navbar">
+    <div class="brand">
+      <span class="brand-icon">🛡️</span>
+      <div class="brand-text">
+        <h1>SBTE-LeakShield</h1>
+        <p>State Board of Technical Education, Bihar • Central Secure Exam Monitoring</p>
+      </div>
+    </div>
+    <div class="nav-status">
+      <div class="system-badge">
+        <span class="pulse-dot"></span>
+        <span id="hardwareBadge">{% if vault.hardware_connected %}ARDUINO SERIAL CONNECTED{% else %}ARDUINO SIMULATION ACTIVE{% endif %}</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+    
+    <!-- Quick Statistics -->
+    <section class="stat-grid">
+      <div class="stat-card">
+        <span class="stat-header">Active Exam Centers</span>
+        <span class="stat-value">{{ vault.active_centers }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-header">Trunk Lock State</span>
+        <span class="stat-value" id="statVaultStatus">
+          {% if vault.is_locked %}LOCKED 🔒{% else %}UNLOCKED 🔓{% endif %}
+        </span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-header">Surveillance Feed</span>
+        <span class="stat-value" style="color: var(--accent-emerald);">ONLINE 🔴</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-header">Central Board OTP</span>
+        <span class="stat-value" style="letter-spacing: 0.15em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
+      </div>
+    </section>
+
+    <!-- Main Dashboard Split View -->
+    <div class="dashboard-grid">
+
+      <!-- Left: IoT Vault Control Panel -->
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">🔐 Smart Digital Vault Control</h2>
+          <span class="severity-pill {% if vault.is_locked %}severity-HIGH{% else %}severity-MEDIUM{% endif %}" id="vaultBadge">
+            {% if vault.is_locked %}SERVO LOCKED (0°){% else %}SERVO OPEN (90°){% endif %}
+          </span>
+        </div>
+        <div class="panel-body">
+          <div class="vault-visual">
+            <div class="vault-icon" id="vaultVisualIcon">
+              {% if vault.is_locked %}🔒{% else %}🔓{% endif %}
+            </div>
+            <div class="vault-status-text {% if vault.is_locked %}locked{% else %}unlocked{% endif %}" id="vaultStatusText">
+              {% if vault.is_locked %}DIGITAL TRUNK LOCKED{% else %}DIGITAL TRUNK UNLOCKED{% endif %}
+            </div>
+            <div class="vault-subtext">Servo Motor: Pin 9 (90° rotation) | Buzzer: Pin 8 (2s alert tone)</div>
+          </div>
+
+          <div class="info-list">
+            <div class="info-row">
+              <span class="info-label">Exam Center:</span>
+              <span class="info-value">{{ vault.exam_center }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Subject & Paper:</span>
+              <span class="info-value">{{ vault.paper_subject }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Exam Time Window:</span>
+              <span class="info-value">{{ vault.scheduled_time }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Current 4-Digit OTP:</span>
+              <span class="info-value" style="font-weight: 700; letter-spacing: 0.2em; color: var(--accent-cyan);">{{ vault.active_otp }}</span>
+            </div>
+          </div>
+
+          <!-- Unlock Form with 4-Digit OTP -->
+          <form class="unlock-form" id="unlockForm" onsubmit="handleUnlock(event)">
+            <input 
+              type="text" 
+              class="otp-input" 
+              id="otpInput" 
+              placeholder="4-DIGIT OTP" 
+              maxlength="4" 
+              pattern="\d{4}" 
+              inputmode="numeric" 
+              autocomplete="off" 
+              required
+            >
+            <button type="submit" class="btn" id="btnUnlock">Disengage Vault</button>
+            <button type="button" class="btn btn-danger" id="btnRelock" onclick="handleLock()" style="display: {% if vault.is_locked %}none{% else %}inline-block{% endif %};">Lock Vault</button>
+          </form>
+          <p id="formFeedback" style="margin-top: 0.9rem; font-size: 0.875rem; text-align: center; min-height: 1.25rem;"></p>
+        </div>
+      </section>
+
+      <!-- Right: AI Live Surveillance Feed (/video_feed) -->
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">👁️ Live AI Surveillance Stream</h2>
+          <span class="severity-pill severity-HIGH">REAL-TIME OPENCV</span>
+        </div>
+        <div class="panel-body" style="display: flex; flex-direction: column; align-items: center;">
+          <div class="video-container">
+            <img 
+              src="{{ url_for('video_feed') }}" 
+              alt="Live OpenCV AI Surveillance Feed" 
+              class="stream-img"
+              onerror="this.onerror=null; this.src=''; this.alt='Video stream offline. Reconnecting...';"
+            >
+            <div class="video-live-tag">
+              <span class="pulse-dot"></span> LIVE REC
+            </div>
+          </div>
+          <div class="video-caption">
+            <p><strong>Active Detection Models:</strong> Human Face Tracking, Handheld Phone/Screen Recognition, Sudden Rapid Motion Detection</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <script>
+    async function handleUnlock(event) {
+      event.preventDefault();
+      const otp = document.getElementById('otpInput').value.trim();
+      const feedback = document.getElementById('formFeedback');
+      const btnUnlock = document.getElementById('btnUnlock');
+
+      if (otp.length !== 4) {
+        feedback.textContent = 'Please enter a valid 4-digit numeric OTP.';
+        feedback.style.color = 'var(--accent-rose)';
+        return;
+      }
+
+      feedback.textContent = 'Transmitting OTP & triggering Arduino signal...';
+      feedback.style.color = 'var(--accent-cyan)';
+      btnUnlock.disabled = true;
+
+      try {
+        const response = await fetch('/api/unlock-vault', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ otp: otp, operator: 'Exam-Superintendent' })
+        });
+        const result = await response.json();
+        
+        if (response.ok && result.status === 'success') {
+          feedback.textContent = result.message;
+          feedback.style.color = 'var(--accent-emerald)';
+          updateVaultUI(false);
+          document.getElementById('otpInput').value = '';
+        } else {
+          feedback.textContent = result.message || 'OTP Verification failed.';
+          feedback.style.color = 'var(--accent-rose)';
+        }
+      } catch (err) {
+        feedback.textContent = 'Network communication error connecting to backend.';
+        feedback.style.color = 'var(--accent-rose)';
+      } finally {
+        btnUnlock.disabled = false;
+      }
+    }
+
+    async function handleLock() {
+      const feedback = document.getElementById('formFeedback');
+      try {
+        const res = await fetch('/api/lock-vault', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          updateVaultUI(true);
+          feedback.textContent = data.message;
+          feedback.style.color = 'var(--text-muted)';
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function updateVaultUI(isLocked) {
+      const visualIcon = document.getElementById('vaultVisualIcon');
+      const statusText = document.getElementById('vaultStatusText');
+      const badge = document.getElementById('vaultBadge');
+      const btnRelock = document.getElementById('btnRelock');
+      const statVault = document.getElementById('statVaultStatus');
+
+      if (isLocked) {
+        visualIcon.textContent = '🔒';
+        statusText.textContent = 'DIGITAL TRUNK LOCKED';
+        statusText.className = 'vault-status-text locked';
+        badge.textContent = 'SERVO LOCKED (0°)';
+        badge.className = 'severity-pill severity-HIGH';
+        btnRelock.style.display = 'none';
+        statVault.textContent = 'LOCKED 🔒';
+      } else {
+        visualIcon.textContent = '🔓';
+        statusText.textContent = 'DIGITAL TRUNK UNLOCKED';
+        statusText.className = 'vault-status-text unlocked';
+        badge.textContent = 'SERVO OPEN (90°)';
+        badge.className = 'severity-pill severity-MEDIUM';
+        btnRelock.style.display = 'inline-block';
+        statVault.textContent = 'UNLOCKED 🔓';
+      }
+    }
+  </script>
+</body>
+</html>
